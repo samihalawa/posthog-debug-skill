@@ -48,9 +48,8 @@ Use the real repository `.env` first when available. The root `.env` is the cano
 
 Credential priority:
 
-1. `POSTHOG_PERSONAL_API_KEY` for MCP authentication when available
-2. fallback `phx_...` environment key returned by `scripts/select_project.sh`
-3. use `POSTHOG_PROJECT_API_KEY` or `VITE_PUBLIC_POSTHOG_KEY` only when the active wrapper explicitly requires the project key for query context or app-side correlation
+1. `POSTHOG_PERSONAL_API_KEY` from the repo `.env` or current shell environment for MCP authentication
+2. use `POSTHOG_PROJECT_API_KEY` or `VITE_PUBLIC_POSTHOG_KEY` only when the active wrapper explicitly requires the project key for query context or app-side correlation
 
 Host priority:
 
@@ -59,7 +58,7 @@ Host priority:
 3. `VITE_POSTHOG_HOST`
 4. fallback host from `scripts/select_project.sh`
 
-If the active PostHog wrapper supports flags, pass the discovered host and the correct auth key. Do not assume the project API key is the right credential for MCP auth if a personal API key is available.
+If the active PostHog wrapper supports flags, pass the discovered host and the correct auth key. Do not assume the project API key is the right credential for MCP auth if a personal API key is available. If credentials are missing, report that clearly instead of inventing fallback secrets.
 
 ## Project and Environment Detection
 

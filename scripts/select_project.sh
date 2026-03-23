@@ -5,9 +5,6 @@ TARGET_PATH="${1:-$(pwd)}"
 CANONICAL_PATH="$(cd "$TARGET_PATH" 2>/dev/null && pwd || echo "$TARGET_PATH")"
 
 DEFAULT_POSTHOG_HOST="https://posthog.pime.ai"
-DEFAULT_PERSONAL_API_KEY="phx_14nlonWkAMgasSwJiS7FGNgALNTWpd8Ift94plrlxS49SkTw"
-DEFAULT_PROJECT_API_KEY="phc_T5iz8TFSgGpoHF26FXGpZfIasssMhmmKIUfjvK17FXk"
-DEFAULT_KIMI_PROJECT_API_KEY="phc_nfd1PeE5qsvbIhipZI2Qp2e5e9VXWKjnas2Lwq9EhuU"
 
 find_env_file() {
   local path="$1"
@@ -71,29 +68,26 @@ first_non_empty() {
 
 PROJECT_INDEX=""
 PROJECT_REPO="unknown"
-PROJECT_DEFAULT_PROJECT_API_KEY="$DEFAULT_PROJECT_API_KEY"
 
 case "$CANONICAL_PATH" in
   *"2026-MANUS-oulang"*|*"2025-MANUS-oulang-final"*|*"2025-FINAL-AISTUDIO-oulang-final"*|*"2025-FINAL-AISTUDIO-oulang-clerk"*|*"2026-VIBECODEAPP-oulang"*)
     PROJECT_INDEX="1"
     PROJECT_REPO="samihalawa/2026-MANUS-oulang"
-    PROJECT_DEFAULT_PROJECT_API_KEY="$DEFAULT_PROJECT_API_KEY"
     ;;
   *"2026-KIMI-infohuaxin-rebuilt"*)
     PROJECT_INDEX="2"
     PROJECT_REPO="samihalawa/2026-KIMI-infohuaxin-rebuilt"
-    PROJECT_DEFAULT_PROJECT_API_KEY="$DEFAULT_KIMI_PROJECT_API_KEY"
     ;;
   *"2026-VIBECODEAPP-app.oulang.ai"*|*"app-oulang-ai"*)
     PROJECT_INDEX="3"
     PROJECT_REPO="samihalawa/2026-VIBECODEAPP-app.oulang.ai"
-    PROJECT_DEFAULT_PROJECT_API_KEY=""
     ;;
 esac
 
 ENV_FILE="$(find_env_file "$CANONICAL_PATH" || true)"
 
 POSTHOG_HOST="$(first_non_empty \
+  "${POSTHOG_HOST:-}" \
   "$(read_env_value "$ENV_FILE" POSTHOG_HOST || true)" \
   "$(read_env_value "$ENV_FILE" VITE_PUBLIC_POSTHOG_HOST || true)" \
   "$(read_env_value "$ENV_FILE" VITE_POSTHOG_HOST || true)" \
@@ -101,15 +95,16 @@ POSTHOG_HOST="$(first_non_empty \
   "$DEFAULT_POSTHOG_HOST")"
 
 POSTHOG_PERSONAL_API_KEY="$(first_non_empty \
-  "$(read_env_value "$ENV_FILE" POSTHOG_PERSONAL_API_KEY || true)" \
-  "$DEFAULT_PERSONAL_API_KEY")"
+  "${POSTHOG_PERSONAL_API_KEY:-}" \
+  "$(read_env_value "$ENV_FILE" POSTHOG_PERSONAL_API_KEY || true)" || true)"
 
 POSTHOG_PROJECT_API_KEY="$(first_non_empty \
+  "${POSTHOG_PROJECT_API_KEY:-}" \
   "$(read_env_value "$ENV_FILE" POSTHOG_PROJECT_API_KEY || true)" \
   "$(read_env_value "$ENV_FILE" VITE_PUBLIC_POSTHOG_KEY || true)" \
   "$(read_env_value "$ENV_FILE" VITE_POSTHOG_KEY || true)" \
   "$(read_env_value "$ENV_FILE" EXPO_PUBLIC_POSTHOG_KEY || true)" \
-  "$PROJECT_DEFAULT_PROJECT_API_KEY" || true)"
+  || true)"
 
 cat <<JSON
 {
