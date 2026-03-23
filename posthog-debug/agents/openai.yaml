@@ -1,4 +1,0 @@
-interface:
-  display_name: "PostHog Debug"
-  short_description: "Full PostHog health and friction audit"
-  default_prompt: "Run a complete PostHog debug audit for the last 8 hours, include errors, rage/dead clicks, performance, journey analysis, session evidence, and prioritized actions."

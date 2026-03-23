@@ -1,32 +1,153 @@
 # HogQL Query Pack
 
-Run all queries with these time windows bound before execution:
+Run the query groups that match the chosen mode. For `full_audit`, run all of them.
+
+Window defaults:
 
 - `CURRENT_8H_START = now() - INTERVAL 8 HOUR`
 - `PREV_8H_START = now() - INTERVAL 16 HOUR`
 - `PREV_8H_END = now() - INTERVAL 8 HOUR`
+- `CURRENT_48H_START = now() - INTERVAL 48 HOUR`
+- `PREV_48H_START = now() - INTERVAL 96 HOUR`
+- `PREV_48H_END = now() - INTERVAL 48 HOUR`
 - `CURRENT_6H_START = now() - INTERVAL 6 HOUR`
 - `BASELINE_6H_START = now() - INTERVAL 54 HOUR`
 - `BASELINE_6H_END = now() - INTERVAL 48 HOUR`
 - `CURRENT_24H_START = now() - INTERVAL 24 HOUR`
+- `CURRENT_7D_START = now() - INTERVAL 7 DAY`
 
-## 0) Property Discovery (Run First)
+## 0) Property Discovery
 
 ```sql
 SELECT key, count() AS events
 FROM (
   SELECT arrayJoin(mapKeys(properties)) AS key
   FROM events
-  WHERE timestamp >= now() - INTERVAL 8 HOUR
+  WHERE timestamp >= now() - INTERVAL 48 HOUR
 )
 GROUP BY key
 ORDER BY events DESC
 LIMIT 300;
 ```
 
-## 2A) Exceptions and Errors
+## 1A) Top Event Inventory (48h)
 
-### A1. All exceptions in current 8h
+```sql
+SELECT
+  event,
+  count() AS events,
+  uniq(distinct_id) AS users
+FROM events
+WHERE timestamp >= now() - INTERVAL 48 HOUR
+GROUP BY event
+ORDER BY events DESC, users DESC
+LIMIT 300;
+```
+
+## 1B) Top Page Inventory (48h)
+
+```sql
+SELECT
+  coalesce(properties.$current_url, '(missing)') AS url,
+  count() AS pageviews,
+  uniq(distinct_id) AS users
+FROM events
+WHERE event = '$pageview'
+  AND timestamp >= now() - INTERVAL 48 HOUR
+GROUP BY url
+ORDER BY pageviews DESC, users DESC
+LIMIT 300;
+```
+
+## 1C) Daily Trend (7d)
+
+```sql
+SELECT
+  toDate(timestamp) AS day,
+  countIf(event = '$pageview') AS pageviews,
+  uniqIf(distinct_id, event = '$pageview') AS active_users,
+  countIf(lowerUTF8(event) LIKE '%signup%' OR lowerUTF8(event) LIKE '%registration%') AS signup_events,
+  countIf(lowerUTF8(event) LIKE '%listing%' OR lowerUTF8(event) LIKE '%post%') AS listing_events,
+  countIf(lowerUTF8(event) LIKE '%payment%' OR lowerUTF8(event) LIKE '%checkout%' OR lowerUTF8(event) LIKE '%credit%') AS payment_events
+FROM events
+WHERE timestamp >= now() - INTERVAL 7 DAY
+GROUP BY day
+ORDER BY day ASC;
+```
+
+## 1D) Bucket Comparison (Current 48h vs Previous 48h)
+
+```sql
+WITH source AS (
+  SELECT
+    if(timestamp >= now() - INTERVAL 48 HOUR, 'current_48h', 'previous_48h') AS period,
+    multiIf(
+      lowerUTF8(event) LIKE '%payment%' OR lowerUTF8(event) LIKE '%checkout%' OR lowerUTF8(event) LIKE '%credit%' OR lowerUTF8(event) LIKE '%recharge%', 'payments',
+      lowerUTF8(event) LIKE '%promote%' OR lowerUTF8(event) LIKE '%banner%', 'promotion',
+      lowerUTF8(event) LIKE '%ai%' OR lowerUTF8(event) LIKE '%assistant%', 'ai',
+      lowerUTF8(event) LIKE '%tv%' OR lowerUTF8(event) LIKE '%episode%' OR lowerUTF8(event) LIKE '%game%', 'media',
+      lowerUTF8(event) LIKE '%support%' OR lowerUTF8(event) LIKE '%chat%', 'support',
+      lowerUTF8(event) LIKE '%error%' OR lowerUTF8(event) LIKE '%timeout%' OR lowerUTF8(event) LIKE '%not_found%', 'custom_reliability',
+      'other'
+    ) AS bucket,
+    distinct_id
+  FROM events
+  WHERE timestamp >= now() - INTERVAL 96 HOUR
+)
+SELECT
+  bucket,
+  period,
+  count() AS events,
+  uniq(distinct_id) AS users
+FROM source
+GROUP BY bucket, period
+ORDER BY bucket, period;
+```
+
+## 1E) Payment and Promotion Event Ranking (48h)
+
+```sql
+SELECT
+  event,
+  count() AS events,
+  uniq(distinct_id) AS users
+FROM events
+WHERE timestamp >= now() - INTERVAL 48 HOUR
+  AND (
+    lowerUTF8(event) LIKE '%payment%'
+    OR lowerUTF8(event) LIKE '%checkout%'
+    OR lowerUTF8(event) LIKE '%credit%'
+    OR lowerUTF8(event) LIKE '%recharge%'
+    OR lowerUTF8(event) LIKE '%promote%'
+    OR lowerUTF8(event) LIKE '%banner%'
+  )
+GROUP BY event
+ORDER BY events DESC, users DESC
+LIMIT 300;
+```
+
+## 1F) Custom Reliability Signals (7d by day)
+
+```sql
+SELECT
+  toDate(timestamp) AS day,
+  event,
+  count() AS events,
+  uniq(distinct_id) AS users
+FROM events
+WHERE timestamp >= now() - INTERVAL 7 DAY
+  AND (
+    lowerUTF8(event) LIKE '%error%'
+    OR lowerUTF8(event) LIKE '%timeout%'
+    OR lowerUTF8(event) LIKE '%not_found%'
+    OR lowerUTF8(event) LIKE '%failed%'
+  )
+GROUP BY day, event
+ORDER BY day ASC, events DESC
+LIMIT 500;
+```
+
+## 2A) Exceptions and Console Errors (8h)
 
 ```sql
 SELECT
@@ -34,66 +155,20 @@ SELECT
   coalesce(properties.$exception_type, '(missing)') AS exception_type,
   toString(coalesce(properties.$exception_handled, 'unknown')) AS handled,
   coalesce(properties.$current_url, '(missing)') AS url,
-  coalesce(properties.$browser, '(missing)') AS browser,
-  coalesce(properties.$os, '(missing)') AS os,
   count() AS events,
   uniq(distinct_id) AS users,
   uniq(coalesce(properties.$session_id, '')) AS sessions
 FROM events
 WHERE event = '$exception'
   AND timestamp >= now() - INTERVAL 8 HOUR
-GROUP BY exception_message, exception_type, handled, url, browser, os
+GROUP BY exception_message, exception_type, handled, url
 ORDER BY events DESC, users DESC
-LIMIT 500;
+LIMIT 300;
 ```
-
-### A2. Handled vs unhandled exceptions trend (current 8h vs previous 8h)
-
-```sql
-SELECT
-  period,
-  handled,
-  count() AS events,
-  uniq(distinct_id) AS users
-FROM (
-  SELECT
-    if(timestamp >= now() - INTERVAL 8 HOUR, 'current_8h', 'previous_8h') AS period,
-    toString(coalesce(properties.$exception_handled, 'unknown')) AS handled
-  FROM events
-  WHERE event = '$exception'
-    AND timestamp >= now() - INTERVAL 16 HOUR
-)
-GROUP BY period, handled
-ORDER BY period, events DESC;
-```
-
-### A3. Error cascades (sessions with multiple exception types)
-
-```sql
-SELECT
-  coalesce(properties.$session_id, '') AS session_id,
-  uniq(coalesce(properties.$exception_type, coalesce(properties.$exception_message, 'unknown'))) AS unique_exception_signatures,
-  count() AS total_exceptions,
-  uniq(distinct_id) AS users,
-  min(timestamp) AS first_seen,
-  max(timestamp) AS last_seen
-FROM events
-WHERE event = '$exception'
-  AND timestamp >= now() - INTERVAL 8 HOUR
-  AND coalesce(properties.$session_id, '') != ''
-GROUP BY session_id
-HAVING unique_exception_signatures >= 2
-ORDER BY unique_exception_signatures DESC, total_exceptions DESC
-LIMIT 200;
-```
-
-### A4. Console errors
 
 ```sql
 SELECT
   coalesce(properties.$current_url, '(missing)') AS url,
-  coalesce(properties.$browser, '(missing)') AS browser,
-  coalesce(properties.$os, '(missing)') AS os,
   count() AS console_error_events,
   uniq(distinct_id) AS users,
   uniq(coalesce(properties.$session_id, '')) AS sessions
@@ -101,57 +176,17 @@ FROM events
 WHERE event = '$console_log'
   AND coalesce(properties.$console_log_level, '') = 'error'
   AND timestamp >= now() - INTERVAL 8 HOUR
-GROUP BY url, browser, os
+GROUP BY url
 ORDER BY console_error_events DESC
 LIMIT 300;
 ```
 
-### A5. Pages with both exceptions and rage clicks in same sessions
-
-```sql
-WITH exceptions AS (
-  SELECT
-    coalesce(properties.$session_id, '') AS session_id,
-    coalesce(properties.$current_url, '(missing)') AS url,
-    count() AS exception_count
-  FROM events
-  WHERE event = '$exception'
-    AND timestamp >= now() - INTERVAL 8 HOUR
-    AND coalesce(properties.$session_id, '') != ''
-  GROUP BY session_id, url
-),
-rage AS (
-  SELECT
-    coalesce(properties.$session_id, '') AS session_id,
-    coalesce(properties.$current_url, '(missing)') AS url,
-    count() AS rage_count
-  FROM events
-  WHERE event = '$rageclick'
-    AND timestamp >= now() - INTERVAL 8 HOUR
-    AND coalesce(properties.$session_id, '') != ''
-  GROUP BY session_id, url
-)
-SELECT
-  e.url,
-  sum(e.exception_count) AS exceptions,
-  sum(r.rage_count) AS rage_clicks,
-  uniq(e.session_id) AS sessions
-FROM exceptions e
-INNER JOIN rage r ON e.session_id = r.session_id AND e.url = r.url
-GROUP BY e.url
-ORDER BY (exceptions + rage_clicks) DESC
-LIMIT 200;
-```
-
-## 2B) Rage Clicks
-
-### B1. Rage clicks by page and element
+## 2B) Rage Clicks (8h)
 
 ```sql
 SELECT
   coalesce(properties.$current_url, '(missing)') AS url,
   coalesce(properties.$el_text, '(no text)') AS element_text,
-  coalesce(properties.$el_tag_name, '(no tag)') AS element_tag,
   coalesce(properties.$el_selector, '(no selector)') AS element_selector,
   count() AS rage_clicks,
   uniq(distinct_id) AS users,
@@ -159,41 +194,18 @@ SELECT
 FROM events
 WHERE event = '$rageclick'
   AND timestamp >= now() - INTERVAL 8 HOUR
-GROUP BY url, element_text, element_tag, element_selector
+GROUP BY url, element_text, element_selector
 ORDER BY rage_clicks DESC, users DESC
-LIMIT 500;
-```
-
-### B2. Rage-click clusters (>=3 in same session)
-
-```sql
-SELECT
-  coalesce(properties.$session_id, '') AS session_id,
-  count() AS rage_clicks,
-  uniq(coalesce(properties.$current_url, '(missing)')) AS pages,
-  min(timestamp) AS first_seen,
-  max(timestamp) AS last_seen
-FROM events
-WHERE event = '$rageclick'
-  AND timestamp >= now() - INTERVAL 8 HOUR
-  AND coalesce(properties.$session_id, '') != ''
-GROUP BY session_id
-HAVING rage_clicks >= 3
-ORDER BY rage_clicks DESC
 LIMIT 300;
 ```
 
-## 2C) Dead Clicks
-
-### C1. Dead clicks by page and element
+## 2C) Dead Clicks (8h)
 
 ```sql
 SELECT
   coalesce(properties.$current_url, '(missing)') AS url,
   coalesce(properties.$el_text, '(no text)') AS element_text,
   coalesce(properties.$el_selector, '(no selector)') AS element_selector,
-  avg(toFloat64OrZero(coalesce(properties.$dead_click_scroll_delay_ms, 0))) AS avg_scroll_delay_ms,
-  avg(toFloat64OrZero(coalesce(properties.$dead_click_mutation_delay_ms, 0))) AS avg_mutation_delay_ms,
   count() AS dead_clicks,
   uniq(distinct_id) AS users,
   uniq(coalesce(properties.$session_id, '')) AS sessions
@@ -201,11 +213,9 @@ FROM events
 WHERE event = '$dead_click'
   AND timestamp >= now() - INTERVAL 8 HOUR
 GROUP BY url, element_text, element_selector
-ORDER BY dead_clicks DESC
-LIMIT 500;
+ORDER BY dead_clicks DESC, users DESC
+LIMIT 300;
 ```
-
-### C2. Dead-click ratio by page
 
 ```sql
 WITH dead AS (
@@ -231,9 +241,7 @@ ORDER BY dead_click_ratio DESC, dead_clicks DESC
 LIMIT 300;
 ```
 
-## 2D) Web Vitals and Performance
-
-### D1. Web vitals by metric and page
+## 2D) Web Vitals and Performance (8h)
 
 ```sql
 SELECT
@@ -251,46 +259,7 @@ ORDER BY metric, p95_value DESC, users DESC
 LIMIT 600;
 ```
 
-### D2. Slow pages intersected with frustration signals
-
-```sql
-WITH slow AS (
-  SELECT
-    coalesce(properties.$current_url, '(missing)') AS url,
-    maxIf(toFloat64OrZero(coalesce(properties.$web_vital_value, 0)), coalesce(properties.$web_vital_name, '') = 'LCP') AS max_lcp,
-    maxIf(toFloat64OrZero(coalesce(properties.$web_vital_value, 0)), coalesce(properties.$web_vital_name, '') IN ('INP', 'FID')) AS max_inp,
-    maxIf(toFloat64OrZero(coalesce(properties.$web_vital_value, 0)), coalesce(properties.$web_vital_name, '') = 'CLS') AS max_cls
-  FROM events
-  WHERE event = '$web_vitals'
-    AND timestamp >= now() - INTERVAL 8 HOUR
-  GROUP BY url
-),
-friction AS (
-  SELECT
-    coalesce(properties.$current_url, '(missing)') AS url,
-    countIf(event = '$rageclick') AS rage_clicks,
-    countIf(event = '$dead_click') AS dead_clicks
-  FROM events
-  WHERE timestamp >= now() - INTERVAL 8 HOUR
-    AND event IN ('$rageclick', '$dead_click')
-  GROUP BY url
-)
-SELECT
-  s.url,
-  s.max_lcp,
-  s.max_inp,
-  s.max_cls,
-  coalesce(f.rage_clicks, 0) AS rage_clicks,
-  coalesce(f.dead_clicks, 0) AS dead_clicks
-FROM slow s
-LEFT JOIN friction f ON s.url = f.url
-ORDER BY (coalesce(f.rage_clicks, 0) + coalesce(f.dead_clicks, 0)) DESC, s.max_lcp DESC
-LIMIT 300;
-```
-
-## 2E) Navigation and Broken Links
-
-### E1. 404 / error landing pages
+## 2E) Navigation and Broken Paths (8h)
 
 ```sql
 SELECT
@@ -310,76 +279,99 @@ ORDER BY pageviews DESC, users DESC
 LIMIT 300;
 ```
 
-### E2. Bounce risk pages (single pageview sessions)
-
-```sql
-WITH session_pageviews AS (
-  SELECT
-    coalesce(properties.$session_id, '') AS session_id,
-    countIf(event = '$pageview') AS pageviews,
-    anyLast(coalesce(properties.$current_url, '(missing)')) AS last_url
-  FROM events
-  WHERE timestamp >= now() - INTERVAL 8 HOUR
-    AND coalesce(properties.$session_id, '') != ''
-    AND event IN ('$pageview', '$pageleave')
-  GROUP BY session_id
-)
-SELECT
-  last_url AS url,
-  countIf(pageviews = 1) AS single_page_sessions,
-  count() AS total_sessions,
-  round(single_page_sessions / nullIf(toFloat64(total_sessions), 0), 3) AS single_page_rate
-FROM session_pageviews
-GROUP BY url
-ORDER BY single_page_rate DESC, total_sessions DESC
-LIMIT 300;
-```
-
 ## 2F) Flow and Conversion Failures
 
-Use event names from your product for each core flow. First discover likely flow events:
+Discover relevant flow events first:
 
 ```sql
-SELECT event, count() AS events
+SELECT
+  event,
+  count() AS events,
+  uniq(distinct_id) AS users
 FROM events
-WHERE timestamp >= now() - INTERVAL 8 HOUR
+WHERE timestamp >= now() - INTERVAL 48 HOUR
   AND (
     lowerUTF8(event) LIKE '%signup%'
     OR lowerUTF8(event) LIKE '%login%'
-    OR lowerUTF8(event) LIKE '%checkout%'
-    OR lowerUTF8(event) LIKE '%payment%'
+    OR lowerUTF8(event) LIKE '%listing%'
     OR lowerUTF8(event) LIKE '%post%'
-    OR lowerUTF8(event) LIKE '%publish%'
+    OR lowerUTF8(event) LIKE '%payment%'
+    OR lowerUTF8(event) LIKE '%checkout%'
+    OR lowerUTF8(event) LIKE '%credit%'
+    OR lowerUTF8(event) LIKE '%recharge%'
+    OR lowerUTF8(event) LIKE '%promote%'
+    OR lowerUTF8(event) LIKE '%banner%'
   )
 GROUP BY event
 ORDER BY events DESC
-LIMIT 200;
+LIMIT 300;
 ```
 
-Then build step-dropoff query per flow:
+Monetization funnel snapshot for known Oulang-style events:
 
 ```sql
 WITH steps AS (
   SELECT
     distinct_id,
-    minIf(timestamp, event = 'signup_started') AS step_1,
-    minIf(timestamp, event = 'signup_submitted') AS step_2,
-    minIf(timestamp, event = 'signup_success') AS step_3
+    minIf(timestamp, event = 'recharge_page_viewed' OR event = 'credits_recharge_page_viewed') AS recharge_viewed_at,
+    minIf(timestamp, event = 'payment_initiated' OR event = 'credits_purchase_initiated') AS payment_started_at,
+    minIf(timestamp, event = 'payment_completed' OR event = 'credits_purchase_completed') AS payment_completed_at,
+    minIf(timestamp, event = 'banner_checkout_started') AS banner_checkout_started_at,
+    minIf(timestamp, event = 'banner_checkout_completed') AS banner_checkout_completed_at
   FROM events
-  WHERE timestamp >= now() - INTERVAL 8 HOUR
-    AND event IN ('signup_started', 'signup_submitted', 'signup_success')
+  WHERE timestamp >= now() - INTERVAL 48 HOUR
+    AND event IN (
+      'recharge_page_viewed',
+      'credits_recharge_page_viewed',
+      'payment_initiated',
+      'credits_purchase_initiated',
+      'payment_completed',
+      'credits_purchase_completed',
+      'banner_checkout_started',
+      'banner_checkout_completed'
+    )
   GROUP BY distinct_id
 )
 SELECT
-  countIf(step_1 IS NOT NULL) AS started,
-  countIf(step_2 IS NOT NULL) AS submitted,
-  countIf(step_3 IS NOT NULL) AS success,
-  (started - submitted) AS drop_before_submit,
-  (submitted - success) AS drop_before_success
+  countIf(recharge_viewed_at IS NOT NULL) AS recharge_viewers,
+  countIf(payment_started_at IS NOT NULL) AS payment_starters,
+  countIf(payment_completed_at IS NOT NULL) AS payment_completers,
+  countIf(banner_checkout_started_at IS NOT NULL) AS banner_checkout_starters,
+  countIf(banner_checkout_completed_at IS NOT NULL) AS banner_checkout_completers
 FROM steps;
 ```
 
-## 3A) Frustration Score per Session
+## 2G) Feature Adoption Comparison (Current 48h vs Previous 48h)
+
+```sql
+WITH source AS (
+  SELECT
+    if(timestamp >= now() - INTERVAL 48 HOUR, 'current_48h', 'previous_48h') AS period,
+    multiIf(
+      lowerUTF8(event) LIKE '%tv%' OR lowerUTF8(event) LIKE '%episode%', 'tv',
+      lowerUTF8(event) LIKE '%game%', 'games',
+      lowerUTF8(event) LIKE '%ai%', 'ai',
+      lowerUTF8(event) LIKE '%support%' OR lowerUTF8(event) LIKE '%chat%', 'support',
+      lowerUTF8(event) LIKE '%promote%' OR lowerUTF8(event) LIKE '%banner%', 'promotion',
+      'other'
+    ) AS feature,
+    count() AS event_count,
+    uniq(distinct_id) AS users
+  FROM events
+  WHERE timestamp >= now() - INTERVAL 96 HOUR
+  GROUP BY period, feature
+)
+SELECT
+  feature,
+  period,
+  event_count,
+  users
+FROM source
+WHERE feature != 'other'
+ORDER BY feature, period;
+```
+
+## 3A) Frustration Score per Session (8h)
 
 ```sql
 WITH session_signals AS (
@@ -415,8 +407,6 @@ LIMIT 200;
 
 ## 5) Trend and Recurrence Windows
 
-### T1. Current 8h vs previous 8h totals
-
 ```sql
 SELECT
   period,
@@ -436,8 +426,6 @@ FROM (
 GROUP BY period
 ORDER BY period;
 ```
-
-### T2. Last 6h vs same 6h two days ago (fingerprints)
 
 ```sql
 WITH source AS (
@@ -500,7 +488,12 @@ SELECT
   uniq(coalesce(properties.$session_id, '')) AS sessions
 FROM events
 WHERE timestamp >= now() - INTERVAL 24 HOUR
-  AND event IN ('$exception', '$rageclick', '$dead_click')
+  AND (
+    event IN ('$exception', '$rageclick', '$dead_click')
+    OR lowerUTF8(event) LIKE '%error%'
+    OR lowerUTF8(event) LIKE '%timeout%'
+    OR lowerUTF8(event) LIKE '%not_found%'
+  )
 GROUP BY event, url, detail
 ORDER BY users DESC, events DESC
 LIMIT 1000;

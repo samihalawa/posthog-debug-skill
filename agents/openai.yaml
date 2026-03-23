@@ -1,0 +1,4 @@
+interface:
+  display_name: "PostHog Debug"
+  short_description: "PostHog analysis for product, funnels, revenue friction, errors, logs, and UX health"
+  default_prompt: "Use $posthog-debug to analyze what changed in PostHog using MCP-native tools first. Inventory top pages and events, compare current vs previous windows, inspect funnels and feature adoption, correlate custom error events with logs and frustration signals, and deliver a prioritized report with direct evidence."
